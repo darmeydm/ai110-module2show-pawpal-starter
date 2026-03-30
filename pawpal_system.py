@@ -225,6 +225,73 @@ class Scheduler:
 
         return {"overbooked": overbooked, "slot_collisions": slot_collisions}
 
+    def find_next_available_slot(
+        self,
+        duration_minutes: int,
+        start_from: str = "08:00",
+        end_by: str = "20:00",
+    ) -> str | None:
+        """
+        Find the earliest open time window that fits a task of the given duration.
+
+        Algorithm (interval gap-search):
+        1. Convert start_from and end_by to integer minutes-since-midnight.
+        2. Collect all pending tasks that have a scheduled time, convert each to
+           a (start, end) interval in minutes, and sort by start.
+        3. Walk the sorted intervals from `start_from`.  After each occupied
+           window, check whether the gap before the next window (or end_by) is
+           wide enough.  Return the first slot that fits.
+        4. If no gap is found inside the day window, return None.
+
+        Args:
+            duration_minutes: How many consecutive minutes the new task needs.
+            start_from: Earliest acceptable start time as "HH:MM" (default 08:00).
+            end_by: Hard deadline — the task must finish by this time (default 20:00).
+
+        Returns:
+            A suggested start time as "HH:MM", or None if no slot is available.
+        """
+        def to_minutes(hhmm: str) -> int:
+            h, m = hhmm.split(":")
+            return int(h) * 60 + int(m)
+
+        def to_hhmm(total_minutes: int) -> str:
+            return f"{total_minutes // 60:02d}:{total_minutes % 60:02d}"
+
+        day_start = to_minutes(start_from)
+        day_end = to_minutes(end_by)
+
+        # Build sorted list of (start, end) intervals from timed pending tasks
+        intervals: list[tuple[int, int]] = []
+        for task in self.tasks:
+            if task.time and not task.completed:
+                try:
+                    s = to_minutes(task.time)
+                    e = s + task.duration_minutes
+                    intervals.append((s, e))
+                except ValueError:
+                    continue  # skip malformed time strings
+        intervals.sort()
+
+        # Walk gaps between intervals looking for a window >= duration_minutes
+        cursor = day_start
+        for (s, e) in intervals:
+            if s <= cursor:
+                # This interval starts before or at our cursor — push cursor past it
+                cursor = max(cursor, e)
+                continue
+            # There is a gap from cursor to s
+            if s - cursor >= duration_minutes and cursor + duration_minutes <= day_end:
+                return to_hhmm(cursor)
+            # Gap was too small — advance past this interval
+            cursor = max(cursor, e)
+
+        # Check the remaining window after all intervals
+        if cursor + duration_minutes <= day_end:
+            return to_hhmm(cursor)
+
+        return None  # no slot found in the day window
+
     def generate_schedule(self) -> "ScheduledPlan":
         """
         Fit as many due tasks as possible into available_minutes, highest priority first.
