@@ -34,8 +34,12 @@ ScheduledPlan
 
 **b. Design changes**
 
-- Did your design change during implementation?
-- If yes, describe at least one change and why you made it.
+After reviewing the initial design, a few issues came up:
+
+1. Task needed a pet attribute — without it there's no way to know which pet a task belongs to, making the owner/scheduler connection pointless.
+2. generate_schedule() needed to return a ScheduledPlan — the original design had no explicit link between Scheduler and ScheduledPlan.
+3. Added a sort_tasks() helper to Scheduler — generate_schedule() was doing too much on its own (filtering, sorting, and building the plan).
+4. ScheduledPlan.total_time now updates automatically when tasks are added instead of being set manually.
 
 ---
 
@@ -48,8 +52,15 @@ ScheduledPlan
 
 **b. Tradeoffs**
 
-- Describe one tradeoff your scheduler makes.
-- Why is that tradeoff reasonable for this scenario?
+The `warn_time_conflicts()` method flags tasks that share the exact same start time (`"HH:MM"`) but does **not** check for overlapping durations. For example, a 30-minute task at `07:00` and a 10-minute task at `07:15` would overlap in real life (the first runs until `07:30`) but would not trigger a warning because their start times differ.
+
+This is a reasonable tradeoff for this stage of the project for two reasons:
+
+1. **Simplicity over precision.** Detecting duration overlap requires computing an end time for each task (`start + duration_minutes`) and then checking every pair of tasks against each other — O(n²) comparisons. Exact start-time matching is O(n) and catches the most obvious scheduling mistakes (two tasks literally assigned the same slot).
+
+2. **Data we actually have.** The `time` field is optional and user-supplied. Many tasks in the system have no time set at all. Building a precise overlap detector around incomplete data would produce false confidence. The exact-match approach is honest about what it can check.
+
+A future improvement would be to compute `(start, end)` intervals for tasks that have a `time` set and flag any pair where `start_a < end_b and start_b < end_a`.
 
 ---
 

@@ -1,33 +1,42 @@
 from pawpal_system import Owner, Pet, Task, Scheduler
 
-# --- Create Owner ---
+# --- Setup ---
 owner = Owner("Shauna")
-
-# --- Create Pets ---
 dog = Pet(name="Biscuit", species="Dog", age=3)
 cat = Pet(name="Luna", species="Cat", age=5)
-
 owner.add_pet(dog)
 owner.add_pet(cat)
 
-# --- Create Tasks ---
-walk = Task(title="Morning Walk", duration_minutes=30, priority="high", frequency="daily", pet=dog)
-feed_dog = Task(title="Feed Biscuit", duration_minutes=10, priority="high", frequency="daily", pet=dog)
-feed_cat = Task(title="Feed Luna", duration_minutes=10, priority="high", frequency="daily", pet=cat)
-grooming = Task(title="Brush Luna", duration_minutes=15, priority="medium", frequency="weekly", pet=cat)
-play = Task(title="Playtime", duration_minutes=20, priority="low", frequency="daily", pet=dog)
+# Two tasks intentionally set to the same time to trigger a conflict warning
+walk     = Task("Morning Walk", 30, "high",   "daily",  pet=dog, time_slot="morning",   time="07:00")
+feed_dog = Task("Feed Biscuit", 10, "high",   "daily",  pet=dog, time_slot="morning",   time="07:45")
+feed_cat = Task("Feed Luna",    10, "high",   "daily",  pet=cat, time_slot="morning",   time="07:00")  # ← same time as walk
+grooming = Task("Brush Luna",   15, "medium", "weekly", pet=cat, time_slot="evening",   time="19:30")
+play     = Task("Playtime",     20, "low",    "daily",  pet=dog, time_slot="afternoon", time="14:00")
+vet_call = Task("Vet Follow-up",45, "medium", "as needed", pet=dog, time_slot="afternoon", time="14:00")  # ← same time as play
 
-# --- Attach tasks to pets ---
-dog.tasks.extend([walk, feed_dog, play])
-cat.tasks.extend([feed_cat, grooming])
+dog.tasks = [walk, feed_dog, play, vet_call]
+cat.tasks = [feed_cat, grooming]
 
-# --- Set up Scheduler ---
-scheduler = Scheduler(owner=owner, available_minutes=60)
-
+scheduler = Scheduler(owner=owner, available_minutes=90)
 for task in owner.get_all_tasks():
     scheduler.add_task(task)
 
-# --- Print Today's Schedule ---
-print(f"\nOwner  : {owner}")
-print(f"Pets   : {dog.get_info()}, {cat.get_info()}")
-scheduler.explain_plan()
+# --- 1. Show all tasks sorted by time ---
+print("=" * 58)
+print("Tasks sorted by start time:")
+print("=" * 58)
+for t in scheduler.sort_by_time():
+    pet_name = t.pet.name if t.pet else "?"
+    print(f"  {t.time}  [{t.priority.upper()}]  {t.title:<20} ({pet_name})")
+
+# --- 2. Conflict detection ---
+print("\n" + "=" * 58)
+print("Conflict check (warn_time_conflicts):")
+print("=" * 58)
+warnings = scheduler.warn_time_conflicts()
+if warnings:
+    for w in warnings:
+        print(f"  {w}")
+else:
+    print("  No time conflicts detected.")
