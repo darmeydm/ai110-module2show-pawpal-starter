@@ -40,13 +40,19 @@ class Task:
         """
         today = date.today()
         if self.next_due_date:
-            return today >= datetime.strptime(self.next_due_date, "%Y-%m-%d").date()
+            try:
+                return today >= datetime.strptime(self.next_due_date, "%Y-%m-%d").date()
+            except ValueError:
+                return True
         if not self.last_completed_date:
             return True
         if self.frequency == "daily":
             return self.last_completed_date != str(today)
         if self.frequency == "weekly":
-            last = datetime.strptime(self.last_completed_date, "%Y-%m-%d").date()
+            try:
+                last = datetime.strptime(self.last_completed_date, "%Y-%m-%d").date()
+            except ValueError:
+                return True
             return (today - last).days >= 7
         return True  # "as needed" is always eligible
 
@@ -116,6 +122,10 @@ class Scheduler:
 
         Returns the new Task if one was created, otherwise None.
         """
+        # Idempotency guard: avoid duplicating recurring follow-up tasks.
+        if task.completed:
+            return None
+
         task.mark_complete()
 
         if task.frequency == "daily":
@@ -252,14 +262,20 @@ class Scheduler:
             A suggested start time as "HH:MM", or None if no slot is available.
         """
         def to_minutes(hhmm: str) -> int:
-            h, m = hhmm.split(":")
-            return int(h) * 60 + int(m)
+            h_str, m_str = hhmm.split(":")
+            h = int(h_str)
+            m = int(m_str)
+            if not (0 <= h < 24 and 0 <= m < 60):
+                raise ValueError(f"Invalid time value: {hhmm}")
+            return h * 60 + m
 
         def to_hhmm(total_minutes: int) -> str:
             return f"{total_minutes // 60:02d}:{total_minutes % 60:02d}"
 
         day_start = to_minutes(start_from)
         day_end = to_minutes(end_by)
+        if day_end <= day_start:
+            raise ValueError("end_by must be later than start_from")
 
         # Build sorted list of (start, end) intervals from timed pending tasks
         intervals: list[tuple[int, int]] = []
