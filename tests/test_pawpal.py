@@ -159,6 +159,21 @@ def test_mark_complete_no_pet_does_not_crash():
     assert next_task in scheduler.tasks
 
 
+def test_mark_complete_twice_is_idempotent():
+    """Completing an already-completed recurring task should not create another follow-up."""
+    task = Task(title="Walk", duration_minutes=20, priority="high", frequency="daily")
+    owner = Owner("Alex")
+    scheduler = Scheduler(owner, available_minutes=120)
+    scheduler.add_task(task)
+
+    first_next = scheduler.mark_task_complete(task)
+    second_next = scheduler.mark_task_complete(task)
+
+    assert first_next is not None
+    assert second_next is None
+    assert len([t for t in scheduler.tasks if t.title == "Walk"]) == 2
+
+
 # ---------------------------------------------------------------------------
 # Conflict detection
 # ---------------------------------------------------------------------------
@@ -249,3 +264,50 @@ def test_single_task_exceeds_budget_is_excluded():
     plan = scheduler.generate_schedule()
 
     assert big_task not in plan.tasks
+
+
+def test_is_due_today_invalid_next_due_date_does_not_crash():
+    """Invalid next_due_date should fail open and remain schedulable."""
+    task = Task(
+        title="Walk",
+        duration_minutes=20,
+        priority="high",
+        next_due_date="2026-99-99",
+    )
+    assert task.is_due_today() is True
+
+
+def test_is_due_today_invalid_weekly_last_completed_date_does_not_crash():
+    """Invalid weekly completion date should fail open and remain schedulable."""
+    task = Task(
+        title="Brush",
+        duration_minutes=10,
+        priority="medium",
+        frequency="weekly",
+        last_completed_date="not-a-date",
+    )
+    assert task.is_due_today() is True
+
+
+def test_find_next_available_slot_rejects_out_of_range_times():
+    """Out-of-range HH:MM values should raise ValueError."""
+    owner = Owner("Alex")
+    scheduler = Scheduler(owner, available_minutes=120)
+
+    try:
+        scheduler.find_next_available_slot(duration_minutes=15, start_from="25:00", end_by="20:00")
+        assert False, "Expected ValueError for invalid time"
+    except ValueError:
+        assert True
+
+
+def test_find_next_available_slot_requires_end_after_start():
+    """end_by must be later than start_from."""
+    owner = Owner("Alex")
+    scheduler = Scheduler(owner, available_minutes=120)
+
+    try:
+        scheduler.find_next_available_slot(duration_minutes=15, start_from="20:00", end_by="20:00")
+        assert False, "Expected ValueError for non-increasing window"
+    except ValueError:
+        assert True
