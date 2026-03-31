@@ -1,4 +1,5 @@
 import streamlit as st
+from datetime import datetime, timedelta
 from pawpal_system import Owner, Pet, Task, Scheduler
 
 st.set_page_config(page_title="PawPal+", page_icon="🐾", layout="centered")
@@ -12,6 +13,28 @@ st.caption("A smart daily planner for busy pet owners.")
 
 if "owner" not in st.session_state:
     st.session_state.owner = Owner("Jordan")
+
+
+def is_valid_hhmm(time_str: str) -> bool:
+    """Validate 24-hour HH:MM time format."""
+    try:
+        datetime.strptime(time_str, "%H:%M")
+        return True
+    except ValueError:
+        return False
+
+
+def end_time_from_start(start: str, duration_minutes: int) -> str:
+    """Compute end time label from HH:MM start plus duration."""
+    if not is_valid_hhmm(start):
+        return "Invalid time"
+    start_dt = datetime.strptime(start, "%H:%M")
+    return (start_dt + timedelta(minutes=duration_minutes)).strftime("%H:%M")
+
+
+def pet_option_label(index: int, pet: Pet) -> str:
+    """Build a unique, human-readable pet label for select boxes."""
+    return f"{pet.name} ({pet.species}, {pet.age}y) [#{index + 1}]"
 
 # ---------------------------------------------------------------------------
 # Step 1 — Owner
@@ -60,9 +83,13 @@ st.subheader("Add a Task")
 if not st.session_state.owner.pets:
     st.warning("Add a pet first before adding tasks.")
 else:
-    pet_names = [p.name for p in st.session_state.owner.pets]
-    selected_pet_name = st.selectbox("Assign task to pet", pet_names)
-    selected_pet = next(p for p in st.session_state.owner.pets if p.name == selected_pet_name)
+    pet_indices = list(range(len(st.session_state.owner.pets)))
+    selected_pet_index = st.selectbox(
+        "Assign task to pet",
+        pet_indices,
+        format_func=lambda i: pet_option_label(i, st.session_state.owner.pets[i]),
+    )
+    selected_pet = st.session_state.owner.pets[selected_pet_index]
 
     col1, col2, col3 = st.columns(3)
     with col1:
@@ -81,17 +108,21 @@ else:
         frequency = st.selectbox("Frequency", ["daily", "weekly", "as needed"])
 
     if st.button("Add task"):
-        new_task = Task(
-            title=task_title,
-            duration_minutes=int(duration),
-            priority=priority,
-            pet=selected_pet,
-            time_slot=time_slot,
-            time=task_time.strip(),
-            frequency=frequency,
-        )
-        selected_pet.tasks.append(new_task)
-        st.success(f"Task **'{task_title}'** added to {selected_pet.name}.")
+        normalized_time = task_time.strip()
+        if normalized_time and not is_valid_hhmm(normalized_time):
+            st.error("Invalid start time format. Use HH:MM (e.g. 08:30, 14:00).")
+        else:
+            new_task = Task(
+                title=task_title,
+                duration_minutes=int(duration),
+                priority=priority,
+                pet=selected_pet,
+                time_slot=time_slot,
+                time=normalized_time,
+                frequency=frequency,
+            )
+            selected_pet.tasks.append(new_task)
+            st.success(f"Task **'{task_title}'** added to {selected_pet.name}.")
 
     # Show all tasks across all pets
     all_tasks = st.session_state.owner.get_all_tasks()
@@ -174,7 +205,11 @@ if st.button("Generate schedule"):
             scheduler.add_task(task)
 
         plan = scheduler.generate_schedule()
-        skipped = [t for t in scheduler.tasks if t not in plan.tasks and not t.completed]
+        not_due_today = [t for t in scheduler.tasks if not t.completed and not t.is_due_today()]
+        skipped_due_to_time = [
+            t for t in scheduler.tasks
+            if t not in plan.tasks and not t.completed and t.is_due_today()
+        ]
 
         # Summary metrics
         col_m1, col_m2, col_m3 = st.columns(3)
@@ -202,14 +237,20 @@ if st.button("Generate schedule"):
         else:
             st.warning("No tasks fit in the available time. Try increasing the time budget.")
 
-        if skipped:
+        if skipped_due_to_time:
             st.info(
-                f"{len(skipped)} task(s) were skipped — not enough time remaining. "
+                f"{len(skipped_due_to_time)} task(s) were skipped — not enough time remaining. "
                 f"Consider increasing available time or reducing task durations."
             )
             with st.expander("Show skipped tasks"):
-                for t in skipped:
+                for t in skipped_due_to_time:
                     st.markdown(f"- ~~{t.title}~~ ({t.pet.name if t.pet else '—'}, {t.duration_minutes} min)")
+
+        if not_due_today:
+            st.info(f"{len(not_due_today)} task(s) are not due today based on frequency settings.")
+            with st.expander("Show not-due tasks"):
+                for t in not_due_today:
+                    st.markdown(f"- {t.title} ({t.pet.name if t.pet else '—'}, {t.frequency})")
 
         # Conflict warnings alongside the generated schedule
         conflict_warnings = scheduler.warn_time_conflicts()
@@ -231,20 +272,26 @@ all_tasks_filter = st.session_state.owner.get_all_tasks()
 if not all_tasks_filter:
     st.info("No tasks yet.")
 else:
-    pet_filter_names = [p.name for p in st.session_state.owner.pets]
-    filter_pet = st.selectbox("Show tasks for", pet_filter_names, key="filter_pet_select")
+    pet_indices = list(range(len(st.session_state.owner.pets)))
+    filter_pet_index = st.selectbox(
+        "Show tasks for",
+        pet_indices,
+        key="filter_pet_select",
+        format_func=lambda i: pet_option_label(i, st.session_state.owner.pets[i]),
+    )
+    filter_pet_obj = st.session_state.owner.pets[filter_pet_index]
 
     temp_s = Scheduler(owner=st.session_state.owner, available_minutes=999)
     for t in all_tasks_filter:
         temp_s.add_task(t)
 
-    filtered = temp_s.filter_by_pet(filter_pet)
+    filtered = [t for t in temp_s.tasks if t.pet is filter_pet_obj]
     pending = temp_s.filter_by_status(completed=False)
-    pending_for_pet = [t for t in pending if t.pet and t.pet.name == filter_pet]
+    pending_for_pet = [t for t in pending if t.pet is filter_pet_obj]
 
     if filtered:
         col_f1, col_f2 = st.columns(2)
-        col_f1.metric(f"Total tasks for {filter_pet}", len(filtered))
+        col_f1.metric(f"Total tasks for {filter_pet_obj.name}", len(filtered))
         col_f2.metric("Pending", len(pending_for_pet))
 
         st.table([
@@ -259,7 +306,7 @@ else:
             for t in filtered
         ])
     else:
-        st.info(f"No tasks found for {filter_pet}.")
+        st.info(f"No tasks found for {filter_pet_obj.name}.")
 
 # ---------------------------------------------------------------------------
 # Step 7 — Find Next Available Slot
@@ -304,10 +351,7 @@ if st.button("Find a slot"):
             suggestion = None
 
         if suggestion:
-            end_h = (int(suggestion.split(":")[0]) * 60
-                     + int(suggestion.split(":")[1])
-                     + int(slot_duration))
-            end_time = f"{end_h // 60:02d}:{end_h % 60:02d}"
+            end_time = end_time_from_start(suggestion, int(slot_duration))
             st.success(
                 f"First available slot: **{suggestion} – {end_time}** "
                 f"({int(slot_duration)} min)"
@@ -315,7 +359,16 @@ if st.button("Find a slot"):
 
             # Show how the suggestion fits alongside existing timed tasks
             timed = [t for t in all_tasks_slot if t.time]
-            if timed:
+            valid_timed = [t for t in timed if is_valid_hhmm(t.time)]
+            invalid_timed = [t for t in timed if not is_valid_hhmm(t.time)]
+
+            if invalid_timed:
+                st.warning(
+                    f"{len(invalid_timed)} timed task(s) were hidden from the context table "
+                    "because their start time is not in HH:MM format."
+                )
+
+            if valid_timed:
                 st.markdown("**Existing timed tasks for context:**")
                 st.table([
                     {
@@ -323,15 +376,9 @@ if st.button("Find a slot"):
                         "Pet": t.pet.name if t.pet else "—",
                         "Start": t.time,
                         "Duration": f"{t.duration_minutes} min",
-                        "End": (
-                            lambda s=t.time, d=t.duration_minutes: (
-                                lambda mins=int(s.split(":")[0]) * 60
-                                + int(s.split(":")[1])
-                                + d: f"{mins // 60:02d}:{mins % 60:02d}"
-                            )()
-                        ),
+                        "End": end_time_from_start(t.time, t.duration_minutes),
                     }
-                    for t in sorted(timed, key=lambda x: x.time)
+                    for t in sorted(valid_timed, key=lambda x: x.time)
                 ])
         else:
             st.warning(
